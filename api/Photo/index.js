@@ -50,4 +50,36 @@ router.post("/photo/new", async (req, res) => {
   }
 });
 
+// api tạo mới comment
+router.post("/commentsOfPhoto/:photo_id", async (req, res) => {
+  const { photo_id } = req.params;
+  const { comment } = req.body;
+  const userId = req.session?.user?._id;
+
+  if (!userId) {
+    return res.status(401).json({ message: "Chưa đăng nhập." });
+  }
+  if (!comment || comment.trim() === "") {
+    return res.status(400).json({ message: "Bình luận không được để trống." });
+  }
+  try {
+    const photo = await Photo.findById(photo_id);
+    if (!photo) {
+      return res.status(404).json({ message: "Không tìm thấy ảnh." });
+    }
+    // đẩy comment vào trong mảng photo
+    photo.comments.push({
+      comment,
+      user_id: userId,
+      date_time: new Date(),
+    });
+
+    const savePhoto = await photo.save();
+    res.status(200).json({ message: "Thêm comment thành công", photo: photo });
+  } catch (err) {
+    console.error("Lỗi khi thêm bình luận:", err);
+    return res.status(500).json({ message: "Lỗi server." });
+  }
+});
+
 module.exports = router;
