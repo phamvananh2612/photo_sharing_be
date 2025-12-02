@@ -9,9 +9,18 @@ const photoRouter = require("./api/Photo");
 const postRouter = require("./api/Post");
 
 const app = express();
+
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://photo-sharing-fe.vercel.app",
+];
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true); // cho Postman, server-side
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"], // Thêm OPTIONS
     allowedHeaders: ["Content-Type", "Authorization"], // Thêm các header frontend có thể gửi
@@ -20,14 +29,14 @@ app.use(
 
 app.use(
   session({
-    secret: "Chibi",
+    secret: process.env.SESSION_SECRET || "dev-secret",
     resave: false,
     saveUninitialized: false,
     cookie: {
       maxAge: 60 * 60 * 1000,
       httpOnly: true,
-      secure: false, // Đặt true nếu dùng HTTPS
-      sameSite: "lax", // Cho phép cookie cross-origin
+      secure: process.env.NODE_ENV === "production", // Render = true
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     },
   })
 );
