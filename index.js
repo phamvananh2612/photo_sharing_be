@@ -6,6 +6,7 @@ const database = require("./config/database");
 
 const userRouter = require("./api/User");
 const photoRouter = require("./api/Photo");
+const postRouter = require("./api/Post");
 
 const app = express();
 app.use(
@@ -16,13 +17,6 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"], // Thêm các header frontend có thể gửi
   })
 );
-// app.options(
-//   "*",
-//   cors({
-//     origin: "http://localhost:3000",
-//     credentials: true,
-//   })
-// );
 
 app.use(
   session({
@@ -42,8 +36,9 @@ app.use(express.json()); // dùng để xử lý Json trong body request
 const port = process.env.PORT || 4000;
 database.connect();
 
-app.use("/", userRouter);
-app.use("/photo", photoRouter);
+app.use("/api", userRouter);
+app.use("/api", photoRouter);
+app.use("/api", postRouter);
 
 app.listen(port, () => {
   console.log(`Ứng dụng đang chạy trên cổng ${port}`);

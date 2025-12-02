@@ -15,6 +15,10 @@ const photoSchema = new mongoose.Schema({
     ref: "User",
     required: true,
   },
+  caption: {
+    type: String,
+    default: "",
+  },
   comments: [
     {
       comment: { type: String, required: true },
