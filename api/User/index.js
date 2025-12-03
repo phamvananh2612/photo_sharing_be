@@ -224,4 +224,32 @@ router.post("/auth/logout", isAuthenticated, (req, res) => {
   });
 });
 
+// API kiểm tra session đăng nhập
+router.get("/auth/me", isAuthenticated, async (req, res) => {
+  try {
+    // User đã được lưu trong session khi login
+    const sessionUser = req.session.user;
+
+    // Lấy user mới nhất từ DB để sync dữ liệu
+    const user = await User.findById(sessionUser._id).select("-password");
+
+    if (!user) {
+      return res.status(404).json({
+        valid: false,
+        message: "User không tồn tại",
+      });
+    }
+
+    return res.status(200).json({
+      valid: true,
+      user,
+    });
+  } catch (err) {
+    console.error("Lỗi /auth/me:", err);
+    return res.status(500).json({
+      valid: false,
+      message: "Lỗi server khi xác thực",
+    });
+  }
+});
 module.exports = router;

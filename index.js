@@ -10,10 +10,14 @@ const postRouter = require("./api/Post");
 
 const app = express();
 
+// Xem đang chạy environment gì
+console.log("NODE_ENV =", process.env.NODE_ENV);
+
 const allowedOrigins = [
   "http://localhost:3000",
   "https://photo-sharing-fe.vercel.app",
 ];
+
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -22,11 +26,12 @@ app.use(
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"], // Thêm OPTIONS
-    allowedHeaders: ["Content-Type", "Authorization"], // Thêm các header frontend có thể gửi
+    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
+// Session
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "dev-secret",
@@ -35,20 +40,24 @@ app.use(
     cookie: {
       maxAge: 60 * 60 * 1000,
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production", // Render = true
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+
+      secure: false,
+      sameSite: "lax",
     },
   })
 );
 
-app.use(express.json()); // dùng để xử lý Json trong body request
-const port = process.env.PORT || 4000;
+// Body parser
+app.use(express.json());
+
 database.connect();
 
+// Routers
 app.use("/api", userRouter);
 app.use("/api", photoRouter);
 app.use("/api", postRouter);
 
+const port = process.env.PORT || 4000;
 app.listen(port, () => {
   console.log(`Ứng dụng đang chạy trên cổng ${port}`);
 });
