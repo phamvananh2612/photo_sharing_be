@@ -10,8 +10,13 @@ const postRouter = require("./api/Post");
 
 const app = express();
 
-// Xem đang chạy environment gì
+const isProduction = process.env.NODE_ENV === "production";
 console.log("NODE_ENV =", process.env.NODE_ENV);
+
+//  Nếu deploy sau proxy
+if (isProduction) {
+  app.set("trust proxy", 1);
+}
 
 const allowedOrigins = [
   "http://localhost:3000",
@@ -21,7 +26,7 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true); // cho Postman, server-side
+      if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("Not allowed by CORS"));
     },
@@ -30,6 +35,10 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
+app.use(express.json());
+
+database.connect();
 
 // Session
 app.use(
@@ -40,17 +49,11 @@ app.use(
     cookie: {
       maxAge: 60 * 60 * 1000,
       httpOnly: true,
-
-      secure: false,
-      sameSite: "lax",
+      secure: isProduction, // https thì true
+      sameSite: isProduction ? "none" : "lax", // cross-site thì phải 'none'
     },
   })
 );
-
-// Body parser
-app.use(express.json());
-
-database.connect();
 
 // Routers
 app.use("/api", userRouter);
