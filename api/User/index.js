@@ -121,7 +121,7 @@ router.post("/auth/login", async (req, res) => {
     delete userSafe.password;
 
     return res.status(200).json({
-      message: "Đăng nhập thành công",
+      message: "Đăng nhập thành công 1",
       user: userSafe,
     });
   } catch (err) {

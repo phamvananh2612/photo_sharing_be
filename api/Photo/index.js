@@ -11,10 +11,13 @@ router.get("/users/:userId/photos", async (req, res) => {
   try {
     const userId = req.params.userId;
 
-    const photos = await Photo.find({ user_id: userId });
-
+    const photos = await Photo.find({ user_id: userId }).lean();
+    const photosWithLikesCount = photos.map((photo) => ({
+      ...photo,
+      likesCount: photo.likes ? photo.likes.length : 0,
+    }));
     return res.status(200).json({
-      photos,
+      photos: photosWithLikesCount,
       message:
         photos.length === 0
           ? "Người dùng này chưa đăng bất kì ảnh nào"
@@ -100,7 +103,7 @@ router.patch("/photos/:photoId", isAuthenticated, async (req, res) => {
         .json({ message: "Bạn không có quyền sửa ảnh này" });
     }
 
-    // Cập nhật caption
+    // Cập nhật
     photo.caption = caption;
     await photo.save();
 
@@ -181,10 +184,17 @@ router.delete("/photos/:id", isAuthenticated, async (req, res) => {
 // Lấy toàn bộ ảnh trong db
 router.get("/photos", async (req, res) => {
   try {
-    const photos = await Photo.find().sort({ date_time: -1 });
+    // dùng lean() để có object thuần, dễ thêm field mới
+    const photos = await Photo.find().sort({ date_time: -1 }).lean();
+
+    // thêm likesCount cho mỗi ảnh
+    const photosWithLikes = photos.map((photo) => ({
+      ...photo,
+      likesCount: photo.likes ? photo.likes.length : 0,
+    }));
 
     return res.status(200).json({
-      photos,
+      photos: photosWithLikes,
       message: photos.length === 0 ? "Chưa có ảnh nào" : undefined,
     });
   } catch (error) {
@@ -290,5 +300,88 @@ router.patch(
     }
   }
 );
+
+// API lấy ra danh sách ảnh yêu thích của 1 user
+router.get("/photos/:userId/favorite", isAuthenticated, async (req, res) => {
+  try {
+    const currentUserId = req.session.user._id;
+    const targetUserId = req.params.userId;
+
+    const photos = await Photo.find({ likes: targetUserId })
+      .sort({ date_time: -1 })
+      .lean();
+
+    const photosWithMeta = photos.map((p) => {
+      const likes = p.likes || [];
+
+      return {
+        ...p,
+        likesCount: likes.length,
+        // current user có tym ảnh này không
+        isLiked: likes.some((id) => id === currentUserId),
+      };
+    });
+
+    const isSelf = targetUserId === currentUserId;
+
+    return res.status(200).json({
+      photos: photosWithMeta,
+      message:
+        photosWithMeta.length === 0
+          ? isSelf
+            ? "Bạn chưa tym bức ảnh nào"
+            : "Người dùng này chưa tym bức ảnh nào"
+          : undefined,
+    });
+  } catch (error) {
+    console.log("Lỗi khi lấy danh sách ảnh yêu thích: ", error);
+    return res.status(500).json({
+      message: "Lỗi khi lấy danh sách ảnh yêu thích",
+      error: error.message,
+    });
+  }
+});
+
+// API like/unlike ảnh
+router.patch("/photos/:photoId/like", isAuthenticated, async (req, res) => {
+  try {
+    const { photoId } = req.params;
+
+    // Lấy đúng user đang đăng nhập
+    const userId = req.session.user._id;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Chưa đăng nhập" });
+    }
+
+    const photo = await Photo.findById(photoId);
+    if (!photo) {
+      return res.status(404).json({ message: "Không tìm thấy ảnh" });
+    }
+
+    // So sánh ObjectId cho đúng kiểu
+    const userIdStr = userId.toString();
+    const liked = photo.likes.some((id) => id.toString() === userIdStr);
+
+    if (liked) {
+      // Bỏ like
+      photo.likes = photo.likes.filter((id) => id.toString() !== userIdStr);
+    } else {
+      // Thêm like
+      photo.likes.push(userId);
+    }
+
+    await photo.save();
+
+    res.json({
+      message: liked ? "Unliked" : "Liked",
+      likesCount: photo.likes.length,
+      isLiked: !liked,
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ message: "Lỗi server" });
+  }
+});
 
 module.exports = router;

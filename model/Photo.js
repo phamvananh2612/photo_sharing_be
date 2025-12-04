@@ -19,6 +19,15 @@ const photoSchema = new mongoose.Schema({
     type: String,
     default: "",
   },
+  likes: {
+    type: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    default: [],
+  },
   comments: [
     {
       comment: { type: String, required: true },

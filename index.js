@@ -6,7 +6,6 @@ const database = require("./config/database");
 
 const userRouter = require("./api/User");
 const photoRouter = require("./api/Photo");
-const postRouter = require("./api/Post");
 
 const app = express();
 
@@ -58,7 +57,6 @@ app.use(
 // Routers
 app.use("/api", userRouter);
 app.use("/api", photoRouter);
-app.use("/api", postRouter);
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
