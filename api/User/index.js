@@ -6,10 +6,14 @@ const { upload } = require("../../middleware/upload");
 const { uploadToS3 } = require("../../config/s3");
 const path = require("path");
 
-// Lấy toàn bộ người dùng
-router.get("/users", async (req, res) => {
+// Lấy toàn bộ người dùng — ngoại trừ chính mình
+router.get("/users", isAuthenticated, async (req, res) => {
   try {
-    const users = await User.find().select("-password");
+    const currentUserId = req.session.user._id;
+    const users = await User.find({ _id: { $ne: currentUserId } }).select(
+      "-password"
+    );
+
     return res.status(200).json({ users });
   } catch (error) {
     console.log("Lỗi khi lấy danh sách người dùng: ", error);
@@ -109,27 +113,27 @@ router.post("/auth/login", async (req, res) => {
       return res.status(400).json({ message: "Mật khẩu không chính xác" });
     }
 
-    // Lưu user vào session
     req.session.user = {
       _id: user._id,
       login_name: user.login_name,
       first_name: user.first_name,
       last_name: user.last_name,
+      avatar: user.avatar || null,
     };
 
-    const userSafe = user.toObject();
-    delete userSafe.password;
-
     return res.status(200).json({
-      message: "Đăng nhập thành công 1",
-      user: userSafe,
+      message: "Đăng nhập thành công",
+      user: {
+        _id: user._id,
+        login_name: user.login_name,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        avatar: user.avatar || null,
+      },
     });
   } catch (err) {
-    console.log("Lỗi trong quá trình đăng nhập: ", err);
-    return res.status(500).json({
-      message: "Lỗi trong quá trình đăng nhập",
-      error: err.message,
-    });
+    console.error("Lỗi khi đăng nhập: ", err);
+    return res.status(500).json({ message: "Lỗi server" });
   }
 });
 

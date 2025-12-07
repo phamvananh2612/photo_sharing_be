@@ -1,25 +1,76 @@
 const express = require("express");
 const router = express.Router();
 const Photo = require("../../model/Photo");
+const User = require("../../model/User");
 const { isAuthenticated } = require("../../middleware/auth");
 const { upload } = require("../../middleware/upload");
 const { uploadToS3 } = require("../../config/s3");
 const path = require("path");
 
+const buildPhotoResponse = (photo, currentUserId) => {
+  if (!photo) return null;
+
+  const author = photo.user_id
+    ? {
+        _id: photo.user_id._id || photo.user_id,
+        login_name: photo.user_id.login_name,
+        avatar: photo.user_id.avatar || null,
+      }
+    : null;
+
+  const formattedComments = (photo.comments || []).map((c) => ({
+    _id: c._id,
+    comment: c.comment,
+    date_time: c.date_time,
+    user_id: c.user_id?._id || c.user_id || null,
+    login_name: c.user_id?.login_name || c.login_name || "Người dùng",
+    avatar: c.user_id?.avatar || c.avatar || null,
+  }));
+
+  const likes = Array.isArray(photo.likes) ? photo.likes : [];
+  const currentUserIdStr = currentUserId ? currentUserId : null;
+
+  return {
+    ...photo,
+    user: author,
+    comments: formattedComments,
+    likesCount: likes.length,
+    isLiked: currentUserIdStr
+      ? likes.some((id) => id === currentUserIdStr)
+      : false,
+  };
+};
+
+// Helper: lấy lại 1 photo theo id, populate đầy đủ + format
+const getFormattedPhotoById = async (photoId, currentUserId) => {
+  const raw = await Photo.findById(photoId)
+    .populate("comments.user_id", "login_name avatar")
+    .populate("user_id", "login_name avatar")
+    .lean();
+
+  return buildPhotoResponse(raw, currentUserId);
+};
+
 // Lấy toàn bộ ảnh của 1 người dùng
 router.get("/users/:userId/photos", async (req, res) => {
   try {
     const userId = req.params.userId;
+    const currentUserId = req.session?.user?._id || null;
 
-    const photos = await Photo.find({ user_id: userId }).lean();
-    const photosWithLikesCount = photos.map((photo) => ({
-      ...photo,
-      likesCount: photo.likes ? photo.likes.length : 0,
-    }));
+    const photos = await Photo.find({ user_id: userId })
+      .sort({ date_time: -1 })
+      .populate("comments.user_id", "login_name avatar")
+      .populate("user_id", "login_name avatar")
+      .lean();
+
+    const photosWithMeta = photos.map((p) =>
+      buildPhotoResponse(p, currentUserId)
+    );
+
     return res.status(200).json({
-      photos: photosWithLikesCount,
+      photos: photosWithMeta,
       message:
-        photos.length === 0
+        photosWithMeta.length === 0
           ? "Người dùng này chưa đăng bất kì ảnh nào"
           : undefined,
     });
@@ -31,6 +82,7 @@ router.get("/users/:userId/photos", async (req, res) => {
     });
   }
 });
+
 // tạo bài đăng mới ảnh kèm caption
 router.post(
   "/photos",
@@ -44,30 +96,42 @@ router.post(
       if (!req.file) {
         return res.status(400).json({ message: "Chưa chọn file để upload" });
       }
+
       const { caption } = req.body;
       const file = req.file;
       const user = req.session.user;
 
-      // Tạo key (tên file) unique trong S3
       const ext = path.extname(file.originalname) || "";
       const key = `photos/${user._id}-${Date.now()}${ext}`;
 
-      // Upload ảnh lên S3
       const imageUrl = await uploadToS3(file.buffer, key, file.mimetype);
-      // lưu vào mongoDb
+
       const newPhoto = new Photo({
         file_name: imageUrl,
         date_time: new Date(),
         user_id: user._id,
         caption: caption || "",
         comments: [],
+        likes: [],
       });
 
       const savePhoto = await newPhoto.save();
 
+      const formatted = {
+        ...savePhoto.toObject(),
+        user: {
+          _id: user._id,
+          login_name: user.login_name,
+          avatar: user.avatar || null,
+        },
+        comments: [],
+        likesCount: 0,
+        isLiked: false,
+      };
+
       return res.status(200).json({
         message: "Upload ảnh & lưu database thành công",
-        photo: savePhoto,
+        photo: formatted,
       });
     } catch (error) {
       console.log("Lỗi khi upload ảnh:", error);
@@ -86,34 +150,39 @@ router.patch("/photos/:photoId", isAuthenticated, async (req, res) => {
     const { caption } = req.body;
     const userId = req.session.user._id;
 
-    // Validate input
-    if (typeof caption !== "string") {
-      return res.status(400).json({ message: "Caption không hợp lệ" });
+    if (!caption || caption.trim() === "") {
+      return res.status(400).json({ message: "Caption không được để trống" });
     }
 
-    // Tìm ảnh
     const photo = await Photo.findById(photoId);
     if (!photo) {
-      return res.status(404).json({ message: "Không tìm thấy ảnh" });
+      return res
+        .status(404)
+        .json({ message: "Không tìm thấy ảnh trong database" });
     }
 
     if (photo.user_id.toString() !== userId.toString()) {
-      return res
-        .status(403)
-        .json({ message: "Bạn không có quyền sửa ảnh này" });
+      return res.status(403).json({
+        message: "Bạn không có quyền cập nhật ảnh này",
+      });
     }
 
-    // Cập nhật
-    photo.caption = caption;
+    photo.caption = caption.trim();
     await photo.save();
+
+    // Refetch + populate + format
+    const formatted = await getFormattedPhotoById(photoId, userId);
 
     return res.status(200).json({
       message: "Cập nhật caption thành công",
-      photo,
+      photo: formatted,
     });
   } catch (err) {
-    console.error("Lỗi cập nhật caption:", err);
-    return res.status(500).json({ message: "Lỗi server" });
+    console.log("Lỗi khi cập nhật caption: ", err);
+    return res.status(500).json({
+      message: "Lỗi khi cập nhật caption",
+      error: err.message,
+    });
   }
 });
 
@@ -134,23 +203,64 @@ router.post("/photos/:photoId/comments", isAuthenticated, async (req, res) => {
     }
 
     photo.comments.push({
-      comment,
+      comment: comment.trim(),
       user_id: userId,
       date_time: new Date(),
     });
 
-    const savePhoto = await photo.save();
+    await photo.save();
 
-    return res
-      .status(200)
-      .json({ message: "Thêm comment thành công", photo: savePhoto });
+    // Refetch với populate + lean
+    const populated = await Photo.findById(photoId)
+      .populate("comments.user_id", "login_name avatar")
+      .populate("user_id", "login_name avatar")
+      .lean();
+
+    const photoWithMeta = buildPhotoResponse(populated, userId);
+
+    return res.status(200).json({
+      message: "Thêm comment thành công",
+      photo: photoWithMeta,
+    });
   } catch (err) {
     console.error("Lỗi khi thêm bình luận:", err);
     return res.status(500).json({ message: "Lỗi server." });
   }
 });
 
-// Xóa ảnh
+// API lấy thông tin 1 ảnh theo ID + user author + user comment
+router.get("/photos/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const currentUserId = req.session?.user?._id || null;
+
+    const photo = await Photo.findById(id)
+      .populate("comments.user_id", "login_name avatar")
+      .populate("user_id", "login_name avatar")
+      .lean();
+
+    if (!photo) {
+      return res
+        .status(404)
+        .json({ message: "Không tìm thấy ảnh trong database" });
+    }
+
+    const photoWithMeta = buildPhotoResponse(photo, currentUserId);
+
+    return res.status(200).json({
+      message: "Lấy thông tin ảnh thành công",
+      photo: photoWithMeta,
+    });
+  } catch (err) {
+    console.log("Lỗi GET ảnh theo ID:", err);
+    return res.status(500).json({
+      message: "Lỗi trong quá trình lấy thông tin ảnh",
+      error: err.message,
+    });
+  }
+});
+
+//  APi xóa ảnh
 router.delete("/photos/:id", isAuthenticated, async (req, res) => {
   try {
     const { id } = req.params;
@@ -184,18 +294,21 @@ router.delete("/photos/:id", isAuthenticated, async (req, res) => {
 // Lấy toàn bộ ảnh trong db
 router.get("/photos", async (req, res) => {
   try {
-    // dùng lean() để có object thuần, dễ thêm field mới
-    const photos = await Photo.find().sort({ date_time: -1 }).lean();
+    const currentUserId = req.session?.user?._id || null;
 
-    // thêm likesCount cho mỗi ảnh
-    const photosWithLikes = photos.map((photo) => ({
-      ...photo,
-      likesCount: photo.likes ? photo.likes.length : 0,
-    }));
+    const photos = await Photo.find()
+      .sort({ date_time: -1 })
+      .populate("comments.user_id", "login_name avatar")
+      .populate("user_id", "login_name avatar")
+      .lean();
+
+    const photosWithMeta = photos.map((p) =>
+      buildPhotoResponse(p, currentUserId)
+    );
 
     return res.status(200).json({
-      photos: photosWithLikes,
-      message: photos.length === 0 ? "Chưa có ảnh nào" : undefined,
+      photos: photosWithMeta,
+      message: photosWithMeta.length === 0 ? "Chưa có ảnh nào" : undefined,
     });
   } catch (error) {
     console.log("Lỗi khi lấy danh sách ảnh: ", error);
@@ -258,6 +371,8 @@ router.patch(
       const { photo_id, comment_id } = req.params;
       const { commentUp } = req.body;
       const userId = req.session.user._id;
+      console.log("BODY UPDATE:", req.body);
+      console.log("SESSION USER:", req.session.user);
 
       if (!commentUp || commentUp.trim() === "") {
         return res.status(400).json({
@@ -284,12 +399,20 @@ router.patch(
         });
       }
 
-      comment.comment = commentUp;
+      comment.comment = commentUp.trim();
       await photo.save();
+
+      // Refetch + populate + format
+      const populated = await Photo.findById(photo_id)
+        .populate("comments.user_id", "login_name avatar")
+        .populate("user_id", "login_name avatar")
+        .lean();
+
+      const photoWithMeta = buildPhotoResponse(populated, userId);
 
       return res.status(200).json({
         message: "Sửa cmt thành công",
-        photo: photo,
+        photo: photoWithMeta,
       });
     } catch (err) {
       console.log("Lỗi trong quá trình cập nhật cmt: ", err);
@@ -309,20 +432,15 @@ router.get("/photos/:userId/favorite", isAuthenticated, async (req, res) => {
 
     const photos = await Photo.find({ likes: targetUserId })
       .sort({ date_time: -1 })
+      .populate("comments.user_id", "login_name avatar")
+      .populate("user_id", "login_name avatar")
       .lean();
 
-    const photosWithMeta = photos.map((p) => {
-      const likes = p.likes || [];
+    const photosWithMeta = photos.map((p) =>
+      buildPhotoResponse(p, currentUserId)
+    );
 
-      return {
-        ...p,
-        likesCount: likes.length,
-        // current user có tym ảnh này không
-        isLiked: likes.some((id) => id === currentUserId),
-      };
-    });
-
-    const isSelf = targetUserId === currentUserId;
+    const isSelf = targetUserId.toString() === currentUserId.toString();
 
     return res.status(200).json({
       photos: photosWithMeta,
@@ -346,41 +464,38 @@ router.get("/photos/:userId/favorite", isAuthenticated, async (req, res) => {
 router.patch("/photos/:photoId/like", isAuthenticated, async (req, res) => {
   try {
     const { photoId } = req.params;
-
-    // Lấy đúng user đang đăng nhập
     const userId = req.session.user._id;
-
-    if (!userId) {
-      return res.status(401).json({ message: "Chưa đăng nhập" });
-    }
 
     const photo = await Photo.findById(photoId);
     if (!photo) {
       return res.status(404).json({ message: "Không tìm thấy ảnh" });
     }
 
-    // So sánh ObjectId cho đúng kiểu
     const userIdStr = userId.toString();
-    const liked = photo.likes.some((id) => id.toString() === userIdStr);
+    const isLiked = photo.likes.some((id) => id.toString() === userIdStr);
 
-    if (liked) {
-      // Bỏ like
+    if (isLiked) {
       photo.likes = photo.likes.filter((id) => id.toString() !== userIdStr);
     } else {
-      // Thêm like
       photo.likes.push(userId);
     }
 
     await photo.save();
 
-    res.json({
-      message: liked ? "Unliked" : "Liked",
-      likesCount: photo.likes.length,
-      isLiked: !liked,
+    const populated = await Photo.findById(photoId)
+      .populate("user_id", "login_name avatar")
+      .populate("comments.user_id", "login_name avatar")
+      .lean();
+
+    const formatted = buildPhotoResponse(populated, userId);
+
+    return res.status(200).json({
+      message: isLiked ? "Unliked" : "Liked",
+      photo: formatted,
     });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ message: "Lỗi server" });
+  } catch (err) {
+    console.log("Lỗi like ảnh:", err);
+    return res.status(500).json({ message: "Lỗi server" });
   }
 });
 
